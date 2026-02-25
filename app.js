@@ -45,6 +45,7 @@ let state = {
   chart: null,
   loading: false,
   catalystsVisible: true,
+  hoveredCatalystIdx: null,
 };
 
 // ========================
@@ -274,13 +275,17 @@ function detectCatalysts(data) {
   return selected.sort((a, b) => a.idx - b.idx);
 }
 
-// Ensure 1Y catalysts persist across all timeframes
-function detectCatalystsWithDailyBase(displayData, dailyData) {
+// Ensure 1Y catalysts persist across all timeframes, with older catalysts filling remaining slots
+function detectCatalystsWithDailyBase(displayData, dailyData, range) {
   // Step 1: Detect catalysts from 1Y daily data (these are "core")
   const baseCatalysts = detectCatalysts(dailyData);
 
-  // Step 2: Map daily catalysts to nearest display data index by date
-  const mapped = baseCatalysts.map(c => {
+  // Step 2: Cap core catalysts to leave room for older data on longer timeframes
+  const coreMax = range === 'MAX' ? 3 : range === '5Y' ? 3 : MAX_CATALYSTS;
+  const cappedBase = baseCatalysts.slice(0, coreMax);
+
+  // Step 3: Map daily catalysts to nearest display data index by date
+  const mapped = cappedBase.map(c => {
     const targetTime = c.date.getTime();
     let bestIdx = 0;
     let bestDiff = Infinity;
@@ -303,7 +308,7 @@ function detectCatalystsWithDailyBase(displayData, dailyData) {
     return true;
   });
 
-  // Step 3: Fill remaining slots with catalysts from older data (outside 1Y)
+  // Step 4: Fill remaining slots with catalysts from older data (outside 1Y)
   const remaining = MAX_CATALYSTS - coreCatalysts.length;
   if (remaining <= 0) return coreCatalysts.sort((a, b) => a.idx - b.idx);
 
@@ -316,11 +321,15 @@ function detectCatalystsWithDailyBase(displayData, dailyData) {
     return { ...d, idx: i, pctChange: day1 + day2 };
   });
 
+  // Use a lower threshold for older weekly data (moves can appear smaller on weekly bars)
+  const pctThreshold = (range === '5Y' || range === 'MAX') ? 1.5 : 2;
+
   const olderSorted = withReturns
-    .filter(d => d.date < oneYearAgo && Math.abs(d.pctChange) > 2)
+    .filter(d => d.date < oneYearAgo && Math.abs(d.pctChange) > pctThreshold)
     .sort((a, b) => Math.abs(b.pctChange) - Math.abs(a.pctChange));
 
-  const minSpacing = Math.max(4, Math.floor(displayData.length / 25));
+  // Use smaller spacing for longer charts to allow catalysts across the full range
+  const minSpacing = Math.max(3, Math.floor(displayData.length / 40));
   const additional = [];
 
   for (const item of olderSorted) {
@@ -363,18 +372,6 @@ async function enrichCatalysts(catalysts, events, data) {
         title: `${split.numerator}:${split.denominator} Stock Split`,
         description: formatDateShort(c.date),
         url: `https://www.google.com/search?q=${encodeURIComponent(state.ticker + ' stock split ' + c.date.getFullYear())}`,
-      });
-      continue;
-    }
-
-    // Dividends
-    const div = findNearestEvent(events.dividends, c.date, daysTol);
-    if (div) {
-      enriched.push({
-        idx: c.idx, date: c.date, close: c.close, pctChange: c.pctChange,
-        title: `Dividend: $${div.amount.toFixed(2)}/share`,
-        description: c.pctChange > 0 ? 'Ex-dividend rally' : 'Ex-dividend adjustment',
-        url: `https://www.google.com/search?q=${encodeURIComponent(state.ticker + ' dividend ' + c.date.getFullYear())}`,
       });
       continue;
     }
@@ -547,8 +544,11 @@ const connectorPlugin = {
     const yScale = chart.scales.y;
 
     ctx.save();
+    let hoveredPos = null;
     state._labelPositions.forEach((pos) => {
       const c = pos.catalyst;
+      // Skip hovered catalyst - draw it last (on top)
+      if (c.idx === state.hoveredCatalystIdx) { hoveredPos = pos; return; }
       const dataX = xScale.getPixelForValue(c.idx);
       const dataY = yScale.getPixelForValue(c.close);
       const color = c.pctChange >= 0 ? COLORS.positive : COLORS.negative;
@@ -580,6 +580,43 @@ const connectorPlugin = {
       ctx.stroke();
       ctx.globalAlpha = 1;
     });
+
+    // Draw hovered catalyst LAST so its line is on top of everything
+    if (hoveredPos) {
+      const c = hoveredPos.catalyst;
+      const dataX = xScale.getPixelForValue(c.idx);
+      const dataY = yScale.getPixelForValue(c.close);
+      const chartBottom = chart.chartArea.bottom;
+      const color = c.pctChange >= 0 ? COLORS.positive : COLORS.negative;
+
+      // Full-height dashed line from label bottom to chart bottom
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.globalAlpha = 0.9;
+      ctx.setLineDash([5, 3]);
+      ctx.beginPath();
+      ctx.moveTo(dataX, hoveredPos.bottom + 2);
+      ctx.lineTo(dataX, chartBottom);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+
+      // Bright dot at data point
+      ctx.beginPath();
+      ctx.arc(dataX, dataY, 5, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.fill();
+
+      // Bright outer ring
+      ctx.beginPath();
+      ctx.arc(dataX, dataY, 9, 0, Math.PI * 2);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.5;
+      ctx.globalAlpha = 0.5;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+
     ctx.restore();
   }
 };
@@ -696,8 +733,10 @@ function renderCatalystOverlays(positions) {
       <span class="catalyst-link-icon">&#8599;</span>
     `;
 
-    // Cross-highlight: chart label -> timeline item
+    // Cross-highlight: chart label -> timeline item + bring dotted line to front
     label.addEventListener('mouseenter', () => {
+      state.hoveredCatalystIdx = c.idx;
+      if (state.chart) state.chart.draw();
       const item = document.querySelector(`.timeline-item[data-catalyst-idx="${c.idx}"]`);
       if (item) {
         item.classList.add('highlighted');
@@ -705,6 +744,8 @@ function renderCatalystOverlays(positions) {
       }
     });
     label.addEventListener('mouseleave', () => {
+      state.hoveredCatalystIdx = null;
+      if (state.chart) state.chart.draw();
       const item = document.querySelector(`.timeline-item[data-catalyst-idx="${c.idx}"]`);
       if (item) item.classList.remove('highlighted');
     });
@@ -767,14 +808,18 @@ function renderCatalystTimeline() {
       <span class="timeline-link-icon">&#8599;</span>
     `;
 
-    // Cross-highlight: timeline item -> chart label
+    // Cross-highlight: timeline item -> chart label + bring dotted line to front
     item.addEventListener('mouseenter', (e) => {
+      state.hoveredCatalystIdx = c.idx;
+      if (state.chart) state.chart.draw();
       const chartLabel = document.querySelector(`.catalyst-label[data-catalyst-idx="${c.idx}"]`);
       if (chartLabel) {
         chartLabel.classList.add('highlighted');
       }
     });
     item.addEventListener('mouseleave', () => {
+      state.hoveredCatalystIdx = null;
+      if (state.chart) state.chart.draw();
       const chartLabel = document.querySelector(`.catalyst-label[data-catalyst-idx="${c.idx}"]`);
       if (chartLabel) chartLabel.classList.remove('highlighted');
     });
@@ -1229,13 +1274,13 @@ async function generateChart(ticker, range) {
       oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
       const recentDaily = data.filter(d => d.date >= oneYearAgo);
       rawCatalysts = recentDaily.length >= 10
-        ? detectCatalystsWithDailyBase(data, recentDaily)
+        ? detectCatalystsWithDailyBase(data, recentDaily, range)
         : detectCatalysts(data);
     } else {
       // 5Y/MAX use weekly data; fetch 1Y daily for base catalysts
       try {
         const dailyResult = await fetchStockData(ticker.toUpperCase(), '1Y');
-        rawCatalysts = detectCatalystsWithDailyBase(data, dailyResult.data);
+        rawCatalysts = detectCatalystsWithDailyBase(data, dailyResult.data, range);
       } catch {
         rawCatalysts = detectCatalysts(data);
       }
