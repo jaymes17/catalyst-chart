@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Stock Catalyst Chart</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Toolbar (not exported) -->
+    <div class="toolbar">
+      <div class="toolbar-left">
+        <div class="logo">CatalystChart</div>
+      </div>
+      <div class="toolbar-center">
+        <div class="ticker-input-group">
+          <input type="text" id="ticker-input" placeholder="Enter ticker symbol (e.g. NVDA)" spellcheck="false" autocomplete="off">
+          <button id="search-btn">Generate Chart</button>
+        </div>
+      </div>
+      <div class="toolbar-right">
+        <div class="timeframe-buttons" id="timeframe-buttons">
+          <button data-range="1Y">1Y</button>
+          <button data-range="2Y">2Y</button>
+          <button data-range="5Y" class="active">5Y</button>
+          <button data-range="MAX">MAX</button>
+        </div>
+        <div class="export-buttons">
+          <button id="copy-btn" class="export-btn" title="Copy chart to clipboard">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            Copy
+          </button>
+          <button id="download-btn" class="export-btn" title="Download as PNG">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Download
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Chart Card (this gets exported) -->
+    <div id="chart-card" class="chart-card">
+      <!-- Header -->
+      <div class="chart-header">
+        <div class="title-section">
+          <h1 id="company-name">Enter a Ticker to Begin</h1>
+          <p id="chart-subtitle">Type a stock symbol above and click Generate</p>
+          <div id="upcoming-catalyst" class="upcoming-catalyst hidden">
+            <svg class="upcoming-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+              <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+            </svg>
+            <div class="upcoming-content">
+              <span class="upcoming-label">UPCOMING</span>
+              <span id="upcoming-detail" class="upcoming-detail"></span>
+            </div>
+            <span id="upcoming-countdown" class="upcoming-countdown"></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Body: Chart + Metrics -->
+      <div class="chart-body">
+        <div class="chart-area">
+          <canvas id="chart-canvas"></canvas>
+          <div id="catalyst-overlays" class="catalyst-overlays"></div>
+          <button id="toggle-catalysts-btn" class="toggle-catalysts-btn" title="Toggle catalyst labels">
+            <span class="toggle-track"><span class="toggle-thumb"></span></span>
+            Catalysts
+          </button>
+          <button id="reset-zoom-btn" class="reset-zoom-btn hidden">Reset Zoom</button>
+        </div>
+        <div class="metrics-panel" id="metrics-panel">
+          <div class="metrics-placeholder">
+            <p>Key metrics will appear here after generating a chart</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Footer -->
+      <div class="chart-footer">
+        <span class="branding">CatalystChart</span>
+        <span id="generated-date" class="gen-date"></span>
+      </div>
+    </div>
+
+    <!-- Catalyst Timeline List -->
+    <div id="catalyst-timeline" class="catalyst-timeline hidden">
+      <div class="timeline-header">
+        <h2>Key Catalysts</h2>
+        <span class="timeline-subtitle">Most recent first</span>
+      </div>
+      <div id="timeline-list" class="timeline-list"></div>
+    </div>
+
+    <!-- Loading overlay -->
+    <div id="loading" class="loading-overlay hidden">
+      <div class="spinner"></div>
+      <p>Loading chart data...</p>
+    </div>
+
+    <!-- Error message -->
+    <div id="error-toast" class="error-toast hidden">
+      <p id="error-message"></p>
+      <button id="error-close" class="error-close">&times;</button>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.2.0/dist/chartjs-plugin-zoom.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
