@@ -527,6 +527,24 @@ body {
 }
 
 /* ======================== */
+/*  Chart Footnote          */
+/* ======================== */
+.chart-footnote {
+  padding: 0 28px 4px;
+}
+
+.chart-footnote.hidden {
+  display: none;
+}
+
+.chart-footnote span {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* ======================== */
 /*  Chart Footer            */
 /* ======================== */
 .chart-footer {

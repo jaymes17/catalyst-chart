@@ -247,10 +247,15 @@ function findNearestEvent(eventMap, targetDate, maxDays) {
 function detectCatalysts(data) {
   if (data.length < 10) return [];
 
-  const withReturns = data.map((d, i) => ({
-    ...d, idx: i,
-    pctChange: i === 0 ? 0 : ((d.close - data[i - 1].close) / data[i - 1].close) * 100,
-  }));
+  const withReturns = data.map((d, i) => {
+    // 2-session combined return: from close before catalyst through close after next session
+    const prev = i > 0 ? data[i - 1].close : d.close;
+    const next = i < data.length - 1 ? data[i + 1].close : d.close;
+    return {
+      ...d, idx: i,
+      pctChange: i === 0 ? 0 : ((next - prev) / prev) * 100,
+    };
+  });
 
   const sorted = [...withReturns]
     .filter(d => Math.abs(d.pctChange) > 2)
@@ -627,7 +632,7 @@ function renderCatalystOverlays(positions) {
         <div class="catalyst-title">${escapeHtml(c.title)}</div>
         <div class="catalyst-desc">${escapeHtml(c.description || '')}</div>
       </div>
-      <span class="catalyst-pct ${isPos ? 'positive' : 'negative'}">${formatPercent(c.pctChange)}</span>
+      <span class="catalyst-pct ${isPos ? 'positive' : 'negative'}">${formatPercent(c.pctChange)}*</span>
       <span class="catalyst-link-icon">&#8599;</span>
     `;
 
@@ -698,7 +703,7 @@ function renderCatalystTimeline() {
         <div class="timeline-title">${escapeHtml(c.title)}</div>
         <div class="timeline-desc">${escapeHtml(c.description || '')}</div>
       </div>
-      <span class="timeline-pct ${isPos ? 'positive' : 'negative'}">${formatPercent(c.pctChange)}</span>
+      <span class="timeline-pct ${isPos ? 'positive' : 'negative'}">${formatPercent(c.pctChange)}*</span>
       <span class="timeline-link-icon">&#8599;</span>
     `;
 
@@ -1012,7 +1017,7 @@ async function captureChartAsCanvas() {
       ctx.font = '700 11px Inter';
       ctx.fillStyle = color;
       ctx.textAlign = 'right';
-      ctx.fillText(formatPercent(c.pctChange), lx + lw - 8, ly + lh / 2);
+      ctx.fillText(formatPercent(c.pctChange) + '*', lx + lw - 8, ly + lh / 2);
     });
   }
 
@@ -1058,8 +1063,13 @@ async function captureChartAsCanvas() {
     });
   }
 
-  // Footer
+  // Footnote
   const fy = rect.height - 30;
+  ctx.font = 'italic 9px Inter'; ctx.fillStyle = COLORS.textMuted;
+  ctx.textAlign = 'left';
+  ctx.fillText('* % change reflects the combined price movement over the catalyst session and the following trading session.', 28, fy - 8);
+
+  // Footer
   ctx.strokeStyle = '#1e293b'; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(28, fy); ctx.lineTo(rect.width - 28, fy); ctx.stroke();
   ctx.font = '600 11px Inter'; ctx.fillStyle = COLORS.textMuted;
@@ -1159,6 +1169,10 @@ async function generateChart(ticker, range) {
     renderCatalystTimeline();
 
     renderUpcomingCatalyst();
+
+    // Show footnote
+    const footnote = document.getElementById('chart-footnote');
+    if (footnote) footnote.classList.remove('hidden');
 
     // Ensure catalyst toggle is on
     state.catalystsVisible = true;
