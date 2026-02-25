@@ -274,6 +274,66 @@ function detectCatalysts(data) {
   return selected.sort((a, b) => a.idx - b.idx);
 }
 
+// Ensure 1Y catalysts persist across all timeframes
+function detectCatalystsWithDailyBase(displayData, dailyData) {
+  // Step 1: Detect catalysts from 1Y daily data (these are "core")
+  const baseCatalysts = detectCatalysts(dailyData);
+
+  // Step 2: Map daily catalysts to nearest display data index by date
+  const mapped = baseCatalysts.map(c => {
+    const targetTime = c.date.getTime();
+    let bestIdx = 0;
+    let bestDiff = Infinity;
+    for (let i = 0; i < displayData.length; i++) {
+      const diff = Math.abs(displayData[i].date.getTime() - targetTime);
+      if (diff < bestDiff) { bestDiff = diff; bestIdx = i; }
+    }
+    return {
+      ...displayData[bestIdx],
+      idx: bestIdx,
+      pctChange: c.pctChange, // Keep the daily pctChange
+    };
+  });
+
+  // Deduplicate if multiple daily catalysts map to the same display point
+  const seen = new Set();
+  const coreCatalysts = mapped.filter(c => {
+    if (seen.has(c.idx)) return false;
+    seen.add(c.idx);
+    return true;
+  });
+
+  // Step 3: Fill remaining slots with catalysts from older data (outside 1Y)
+  const remaining = MAX_CATALYSTS - coreCatalysts.length;
+  if (remaining <= 0) return coreCatalysts.sort((a, b) => a.idx - b.idx);
+
+  const oneYearAgo = new Date();
+  oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+
+  const withReturns = displayData.map((d, i) => {
+    const day1 = i > 0 ? ((d.close - displayData[i - 1].close) / displayData[i - 1].close) * 100 : 0;
+    const day2 = (i > 0 && i < displayData.length - 1) ? ((displayData[i + 1].close - d.close) / d.close) * 100 : 0;
+    return { ...d, idx: i, pctChange: day1 + day2 };
+  });
+
+  const olderSorted = withReturns
+    .filter(d => d.date < oneYearAgo && Math.abs(d.pctChange) > 2)
+    .sort((a, b) => Math.abs(b.pctChange) - Math.abs(a.pctChange));
+
+  const minSpacing = Math.max(4, Math.floor(displayData.length / 25));
+  const additional = [];
+
+  for (const item of olderSorted) {
+    if (additional.length >= remaining) break;
+    const allPlaced = [...coreCatalysts, ...additional];
+    if (!allPlaced.some(s => Math.abs(s.idx - item.idx) < minSpacing)) {
+      additional.push(item);
+    }
+  }
+
+  return [...coreCatalysts, ...additional].sort((a, b) => a.idx - b.idx);
+}
+
 async function enrichCatalysts(catalysts, events, data) {
   const enriched = [];
   const newsPromises = [];
@@ -1157,8 +1217,30 @@ async function generateChart(ticker, range) {
     state.events = events;
     state.ma = calculateMA(data, MA_PERIOD);
 
-    const rawCatalysts = detectCatalysts(data);
     state.metrics = calculateMetrics(data, meta, range);
+
+    // Detect catalysts - ensure 1Y catalysts persist on all timeframes
+    let rawCatalysts;
+    if (range === '1Y') {
+      rawCatalysts = detectCatalysts(data);
+    } else if (range === '2Y') {
+      // 2Y is daily data; extract recent 1Y as base catalysts
+      const oneYearAgo = new Date();
+      oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+      const recentDaily = data.filter(d => d.date >= oneYearAgo);
+      rawCatalysts = recentDaily.length >= 10
+        ? detectCatalystsWithDailyBase(data, recentDaily)
+        : detectCatalysts(data);
+    } else {
+      // 5Y/MAX use weekly data; fetch 1Y daily for base catalysts
+      try {
+        const dailyResult = await fetchStockData(ticker.toUpperCase(), '1Y');
+        rawCatalysts = detectCatalystsWithDailyBase(data, dailyResult.data);
+      } catch {
+        rawCatalysts = detectCatalysts(data);
+      }
+    }
+
     state.catalysts = await enrichCatalysts(rawCatalysts, events, data);
 
     updateHeader(state.metrics, range);
