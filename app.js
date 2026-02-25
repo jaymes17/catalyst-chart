@@ -248,12 +248,12 @@ function detectCatalysts(data) {
   if (data.length < 10) return [];
 
   const withReturns = data.map((d, i) => {
-    // 2-session combined return: from close before catalyst through close after next session
-    const prev = i > 0 ? data[i - 1].close : d.close;
-    const next = i < data.length - 1 ? data[i + 1].close : d.close;
+    // Sum of this session's % change + next session's % change
+    const day1 = i > 0 ? ((d.close - data[i - 1].close) / data[i - 1].close) * 100 : 0;
+    const day2 = (i > 0 && i < data.length - 1) ? ((data[i + 1].close - d.close) / d.close) * 100 : 0;
     return {
       ...d, idx: i,
-      pctChange: i === 0 ? 0 : ((next - prev) / prev) * 100,
+      pctChange: day1 + day2,
     };
   });
 
