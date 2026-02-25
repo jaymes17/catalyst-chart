@@ -343,6 +343,116 @@ function detectCatalystsWithDailyBase(displayData, dailyData, range) {
   return [...coreCatalysts, ...additional].sort((a, b) => a.idx - b.idx);
 }
 
+// Detect likely earnings dates from overnight price gaps
+// Earnings cause the largest gaps between previous close and next open
+function detectEarningsFromGaps(data) {
+  if (data.length < 20) return [];
+
+  const gaps = [];
+  for (let i = 1; i < data.length; i++) {
+    if (data[i].open != null && data[i - 1].close != null) {
+      const gapPct = Math.abs((data[i].open - data[i - 1].close) / data[i - 1].close) * 100;
+      gaps.push({ idx: i, gapPct, date: data[i].date });
+    }
+  }
+
+  gaps.sort((a, b) => b.gapPct - a.gapPct);
+
+  // Select top gaps spaced at least ~50 trading days apart (quarterly)
+  const isDaily = (state.range === '1Y' || state.range === '2Y');
+  const minSpacing = isDaily ? 50 : 10; // 50 days for daily, 10 weeks for weekly
+  const minGap = isDaily ? 2 : 3; // Minimum gap % to qualify
+  const maxEarnings = 4;
+  const selected = [];
+
+  for (const gap of gaps) {
+    if (selected.length >= maxEarnings) break;
+    if (gap.gapPct < minGap) break;
+    if (!selected.some(s => Math.abs(s.idx - gap.idx) < minSpacing)) {
+      selected.push(gap);
+    }
+  }
+
+  return selected;
+}
+
+// Ensure earnings dates are always represented as catalysts
+function injectEarningsCatalysts(rawCatalysts, data, events) {
+  // Use Yahoo Finance earnings events if available, otherwise detect from gaps
+  let earningsDates;
+  if (events?.earnings && Object.keys(events.earnings).length > 0) {
+    const daysTol = (state.range === '1Y' || state.range === '2Y') ? 5 : 10;
+    earningsDates = [];
+    for (const [ts] of Object.entries(events.earnings)) {
+      const earningDate = new Date(Number(ts) * 1000);
+      let bestIdx = -1, bestDiff = Infinity;
+      for (let i = 0; i < data.length; i++) {
+        const diff = Math.abs(data[i].date.getTime() - earningDate.getTime()) / 864e5;
+        if (diff < bestDiff) { bestDiff = diff; bestIdx = i; }
+      }
+      if (bestIdx >= 1 && bestDiff <= daysTol) {
+        earningsDates.push({ idx: bestIdx, date: data[bestIdx].date });
+      }
+    }
+  } else {
+    // Detect earnings from overnight price gaps
+    earningsDates = detectEarningsFromGaps(data);
+  }
+
+  if (!earningsDates.length) return rawCatalysts;
+
+  const earningsCatalysts = [];
+  for (const ed of earningsDates) {
+    // Skip if already covered by an existing catalyst
+    if (rawCatalysts.some(c => Math.abs(c.idx - ed.idx) <= 2)) {
+      // Mark the existing catalyst as earnings
+      const existing = rawCatalysts.find(c => Math.abs(c.idx - ed.idx) <= 2);
+      if (existing) existing._isEarnings = true;
+      continue;
+    }
+
+    const i = ed.idx;
+    const day1 = i > 0 ? ((data[i].close - data[i - 1].close) / data[i - 1].close) * 100 : 0;
+    const day2 = (i > 0 && i < data.length - 1) ? ((data[i + 1].close - data[i].close) / data[i].close) * 100 : 0;
+
+    earningsCatalysts.push({
+      ...data[i],
+      idx: i,
+      pctChange: day1 + day2,
+      _isEarnings: true,
+    });
+  }
+
+  if (!earningsCatalysts.length) return rawCatalysts;
+
+  // Sort earnings by most recent first
+  earningsCatalysts.sort((a, b) => b.idx - a.idx);
+
+  // Merge: add earnings, replacing weakest non-earnings catalysts if at max
+  const merged = [...rawCatalysts];
+
+  for (const ec of earningsCatalysts) {
+    if (merged.length < MAX_CATALYSTS) {
+      merged.push(ec);
+    } else {
+      // Find the weakest non-earnings catalyst to replace
+      let weakestI = -1, weakestAbs = Infinity;
+      for (let j = 0; j < merged.length; j++) {
+        if (merged[j]._isEarnings) continue;
+        if (Math.abs(merged[j].pctChange) < weakestAbs) {
+          weakestAbs = Math.abs(merged[j].pctChange);
+          weakestI = j;
+        }
+      }
+      if (weakestI >= 0) {
+        merged[weakestI] = ec;
+      }
+    }
+  }
+
+  return merged.sort((a, b) => a.idx - b.idx);
+}
+
 async function enrichCatalysts(catalysts, events, data) {
   const enriched = [];
   const newsPromises = [];
@@ -350,7 +460,7 @@ async function enrichCatalysts(catalysts, events, data) {
   for (const c of catalysts) {
     const daysTol = (state.range === '1Y' || state.range === '2Y') ? 5 : 10;
 
-    // Earnings
+    // Earnings - check Yahoo Finance events first
     const earning = findNearestEvent(events.earnings, c.date, daysTol);
     if (earning) {
       const beat = earning.epsActual > earning.epsEstimate;
@@ -360,6 +470,19 @@ async function enrichCatalysts(catalysts, events, data) {
         title: `${getFiscalQuarterLabel(c.date)} Earnings ${beat ? 'Beat' : 'Miss'}`,
         description: hasEps ? `EPS: $${earning.epsActual.toFixed(2)} vs $${earning.epsEstimate.toFixed(2)} est.` : '',
         url: `https://www.google.com/search?q=${encodeURIComponent(state.ticker + ' earnings ' + getFiscalQuarterLabel(c.date))}`,
+      });
+      continue;
+    }
+
+    // Earnings detected from gap analysis
+    if (c._isEarnings) {
+      const qLabel = getFiscalQuarterLabel(c.date);
+      const direction = c.pctChange >= 0 ? '📈' : '📉';
+      enriched.push({
+        idx: c.idx, date: c.date, close: c.close, pctChange: c.pctChange,
+        title: `${qLabel} Earnings Report`,
+        description: `${direction} ${formatPercent(c.pctChange)} reaction`,
+        url: `https://www.google.com/search?q=${encodeURIComponent(state.ticker + ' earnings ' + qLabel)}`,
       });
       continue;
     }
@@ -1285,6 +1408,9 @@ async function generateChart(ticker, range) {
         rawCatalysts = detectCatalysts(data);
       }
     }
+
+    // Ensure earnings are always included as catalysts
+    rawCatalysts = injectEarningsCatalysts(rawCatalysts, data, events);
 
     state.catalysts = await enrichCatalysts(rawCatalysts, events, data);
 
