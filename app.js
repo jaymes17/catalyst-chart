@@ -25,6 +25,7 @@ const MA_PERIOD = 10;
 const MAX_CATALYSTS = 5;
 
 const PROXY_URLS = [
+  (url) => `/api/proxy?url=${encodeURIComponent(url)}`,
   (url) => `https://corsproxy.io/?url=${encodeURIComponent(url)}`,
   (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
 ];
